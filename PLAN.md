@@ -54,7 +54,14 @@ Status: decisions made (see below). Next step: Phase 0.
    overwrites it again, even if the Claude session is renamed.
 5. Hooks ship as a Claude Code plugin from this same repo.
 6. The repo will be public. TPM and Claude Code both install from GitHub.
-   The key table stays on `prefix A`.
+   The key table is on `prefix A` for now (you may change it later).
+7. Icons are Nerd Font glyphs.
+8. Fork variants: split right, new window, and a floating pane. No split
+   below and no popup for now.
+9. Forks are named `<window>-fork`.
+10. If Claude finishes in the pane you are looking at, the state goes
+    straight to `idle` and skips `done`.
+11. The picker is on `prefix C`.
 
 ## Goals and non-goals
 
@@ -99,7 +106,7 @@ one `tmux set -p -t "$TMUX_PANE"` call.
 | `PermissionRequest` | `needs-input` |
 | `Notification` (`permission_prompt\|elicitation_dialog`) | `needs-input` |
 | `Notification` (`idle_prompt`) | `idle`, only if still `working` (recovers from Esc) |
-| `Stop`, `StopFailure` | `done` |
+| `Stop`, `StopFailure` | `done`, or `idle` if you are looking at the pane (decision 10) |
 | `SessionEnd` | unset all `@claude_*` |
 
 Rules for `hook.sh`:
@@ -113,6 +120,11 @@ Rules for `hook.sh`:
   delay is noticeable, and add ordering protection then.
 - After setting the state, refresh the status line of every attached client,
   in the same tmux call.
+- "Looking at the pane" on `Stop`: some client from
+  `list-clients -F '#{pane_id} #{client_flags}'` has this pane as its current
+  pane and has `focused` in its flags. That is one extra tmux call, made only
+  on `Stop`. If you switched to another app, the client is not focused, so
+  you still get `done`.
 
 ### Hook delivery: Claude Code plugin
 
@@ -145,8 +157,16 @@ window text. At render time, `#{P:...}` loops over the window's panes:
 This needs no recompute script, and `join-pane`, `break-pane` and `kill-pane`
 (your `prefix M`) are handled for free.
 
-Default icons, configurable: idle `🤖`, working `⏳`, needs-input `❓`,
-done `✅`.
+Default icons are Nerd Font glyphs and can be changed:
+
+| State | Glyph | Nerd Font name | Codepoint |
+|---|---|---|---|
+| idle | `󰚩` | `nf-md-robot` | U+F06A9 |
+| working | `` | `nf-fa-hourglass_half` | U+F252 |
+| needs-input | `` | `nf-fa-question_circle` | U+F059 |
+| done | `` | `nf-fa-check_circle` | U+F058 |
+
+Phase 1 checks that they render in Alacritty with your font.
 
 ### tmux side (`claude-tmux.tmux`)
 
@@ -166,6 +186,7 @@ done `✅`.
 |---|---|
 | `@claude-tmux-icon-idle` / `-working` / `-needs-input` / `-done` | see above |
 | `@claude-tmux-key` | `A` |
+| `@claude-tmux-picker-key` | `C` |
 | `@claude-tmux-sync-title` | `on` |
 | `@claude-tmux-process` | `claude` |
 
@@ -218,17 +239,15 @@ done `✅`.
   up to that moment.
 - The new Claude fires `SessionStart` with source `fork` in its own pane, and
   the indicator picks it up automatically.
-- Variants in the `prefix A` table:
+- Variants in the `prefix A` table (decision 8):
   - `|`: fork into a split to the right
-  - `-`: fork into a split below
   - `c`: fork into a new window placed next to the current one (your "move to
     another window" variant). It creates the window without `-n`, so
     `automatic-rename` stays on and the window remains Claude-owned for name
     sync.
-  - `p`: fork into a popup (80%) for a quick side question. The popup closes
-    when you exit, and the fork stays resumable via `claude --resume`.
-- Optional: a floating-pane variant (tmux 3.8 adds floating panes; your default
-  `prefix @` uses `break-pane -W`). I would check the exact flags first.
+  - `f`: fork into a floating pane (new in tmux 3.8). Your default `prefix @`
+    toggles floating with `break-pane -W`; Phase 0 finds the flags to create
+    one directly.
 - If the pane has no Claude session, show `display-message "no Claude session
   in this pane"`.
 
@@ -238,9 +257,10 @@ done `✅`.
    sessions. Panes in `needs-input` come first, then `done`. Pressing it
    again moves on to the next one. Implemented as `scripts/jump.sh`
    (one `list-panes -a` call, then switch client, window and pane).
-2. `prefix A Space`: picker of all Claude panes with state icon and title. It
-   is a `choose-tree -Zs` filtered on the claude process, with a custom `-F`.
-   No script needed. It replaces your current `bind C choose-tree ...`.
+2. `prefix C` (decision 11, set by `@claude-tmux-picker-key`): picker of all
+   Claude panes with state icon and title. It is a `choose-tree -Zs` filtered
+   on the claude process, with a custom `-F`. No script needed. It replaces
+   your current `bind C choose-tree ...`.
 
 Rejected:
 
@@ -258,7 +278,7 @@ claude-tmux.tmux                 TPM entrypoint (tmux side)
 .claude-plugin/marketplace.json  makes the repo its own marketplace
 hooks/hooks.json                 Claude hooks, all pointing to hook.sh
 scripts/hook.sh                  hook dispatcher, writes pane options
-scripts/fork.sh                  fork into split / window / popup
+scripts/fork.sh                  fork into split / window / floating pane
 scripts/jump.sh                  jump to next attention pane
 tests/run.sh                     tests on a private tmux server
 README.md
@@ -287,6 +307,9 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
 5. Whether `/rename` and `-n` change the pane title at once.
 6. Whether `#{@claude_state}` inside `#{P:}` resolves per pane, and whether
    setting a pane option needs an explicit status refresh.
+7. The tmux 3.8 flags that create a floating pane directly, with a command.
+8. Whether `client_flags` contains `focused` for the client you are typing in,
+   and drops it when Alacritty loses focus.
 
 ### Phase 1: status indicator (MVP)
 
@@ -301,13 +324,15 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
   - a crashed Claude
   - `join-pane` between windows
   - done reset on focus
-- Checks: shellcheck on all scripts, and `claude plugin validate .`.
+  - `Stop` in the focused pane gives `idle`, not `done`
+- Checks: shellcheck on all scripts, `claude plugin validate .`, and that the
+  Nerd Font icons render in your terminal.
 - Done when: your example (one pane done plus one needing input gives "needs
   input") passes as a test and works live.
 
 ### Phase 2: fork bindings
 
-`fork.sh` and the `prefix A` key table (`|`, `-`, `c`, `p`).
+`fork.sh` and the `prefix A` key table (`|`, `c`, `f`).
 
 ### Phase 3: name sync
 
@@ -322,7 +347,7 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
 
 ### Phase 4: jump and picker
 
-`jump.sh` and the picker binding.
+`jump.sh` and the picker binding on `prefix C`.
 
 ### Phase 5: publish and switch your config
 
@@ -339,7 +364,8 @@ The repo must be public: TPM clones over https without credentials.
    - add the icon to both catppuccin text lines (they must stay before `run`):
      `set -g @catppuccin_window_text " #{window_name}#{E:@claude_tmux_window_icon}#{?window_zoomed_flag, [Z],}"`
      and the same for `@catppuccin_window_current_text`
-   - drop `bind-key C choose-tree ...` (replaced by the picker)
+   - drop `bind-key C choose-tree ...` (the plugin binds `prefix C` to the
+     picker)
 2. Remove the agent-indicator hooks from the running server (or restart
    tmux):
    `tmux set-hook -gu after-select-pane \; set-hook -gu after-select-window \; set-hook -gu pane-focus-in \; set-hook -gu client-session-changed`,
