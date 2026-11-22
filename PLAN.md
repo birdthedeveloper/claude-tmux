@@ -548,7 +548,7 @@ Also found:
 
 Still open: items 3, 4, 11 and the second half of 8. They need the user at the
 keyboard (approve, deny, Esc, switch apps), because `CLAUDE.md` forbids typing
-into a terminal.
+into a terminal. The steps are in `PLAN-phase0-keyboard.md`.
 
 ## How to work
 
