@@ -150,10 +150,15 @@ Rules for `hook.sh`:
     newest one always won.
 - The pending check is part of the same compare-and-set condition, so it needs
   no extra tmux call.
+- Owner check (Phase 0, item 10), also part of that condition: the tty of the
+  Claude that fired the hook must be the pane's tty:
+  `#{==:#{pane_tty},/dev/<tty>}` with `<tty>` from
+  `ps -o tty= -p "$CLAUDE_PID"` (about 3 ms). A Claude started by Claude's Bash
+  tool has no tty, so it can neither set nor unset the pane's state.
 - Automatic compaction fires `SessionStart` in the middle of work, which is why
   source `compact` leaves the state alone.
-- After setting the state, refresh the status line of every attached client,
-  in the same tmux call.
+- No explicit status refresh: `set -p` redraws attached clients by itself, even
+  with `status-interval 0` (Phase 0, item 6).
 - "Looking at the pane" on `Stop`: some client from
   `list-clients -F '#{pane_id} #{client_flags}'` has this pane as its current
   pane and has `focused` in its flags. That is one extra tmux call, made only
@@ -506,39 +511,44 @@ Written 2026-11-22 for the next Claude session.
   `plan`. `master` has just the initial commit.
 - Decisions 1 to 14 are final, don't reopen them. All review comments are
   resolved and the user has no open questions.
-- Ready for Phase 0: yes. Ready for Phase 1: once the gap below is closed.
+- Phase 0 is running on branch `implement`. Ready for Phase 1: once the keyboard
+  items below are answered.
 
-## Open design gap (close it in Phase 0, item 10)
+## Design gap: closed (Phase 0, item 10)
 
-Another Claude can write to the wrong pane. Subprocesses of Claude inherit
-`TMUX_PANE` (checked in the Bash tool), so a `claude -p` started by Claude would
-overwrite the pane's state and session id, and its `SessionEnd` would unset
-them. The background copy made by `/fork` may do the same. Find a cheap way for
-`hook.sh` to ignore these. Candidates:
+Another Claude could write to the wrong pane, because subprocesses of Claude
+inherit `TMUX_PANE`. Fixed by the owner check in the rules for `hook.sh`.
 
-- `CLAUDE_CODE_CHILD_SESSION` is set only in hooks of nested sessions
-- the owning Claude (`CLAUDE_PID`) does not have the pane's tty
+## Phase 0 results
 
-## Phase 0: what is already answered
+Run on Claude Code 2.1.323 and tmux 3.8, on a private tmux server.
 
-- Item 6, first half: yes, pane options resolve per pane inside `#{P:}`. Still
-  open: whether setting one needs an explicit status refresh.
-- Item 7: `new-pane [-x -y -X -Y] <command>` creates a floating pane directly
-  (man page, not run yet).
-- Item 8, first half: yes, `client_flags` shows `focused` for the active
-  client. Still open: whether it drops when Alacritty loses focus.
-- Item 2, partly: the docs say `PreToolUse` fires for `AskUserQuestion`. Whether
-  `PermissionRequest` fires too is open.
-- Item 4, hint: the docs say `idle_prompt` comes 60 s after Claude finishes
-  responding, only if you have not typed and no background agent is running.
-  Esc is not mentioned.
-- Untouched: items 1, 3, 5, 9, 10 and 11.
+| Item | Result |
+|---|---|
+| 1 | Yes, hooks inherit `TMUX_PANE`. |
+| 2 | Both tools fire `PreToolUse` and, about 25 ms later, `PermissionRequest`, each with its tool name. Tested in modes `default` and `plan`. |
+| 3 | Open, needs the keyboard. |
+| 4 | Open, needs the keyboard. After a normal `Stop`, `idle_prompt` came 60 s later. |
+| 5 | Yes, both at once. `/rename` was tested as a start prompt. The glyph stayed `✳` while working, no spinner was seen. |
+| 6 | Yes, per pane. No explicit refresh needed. |
+| 7 | `new-pane -x 60% -y 60% -c <cwd> <shell> -ic ...` works, including separate arguments. |
+| 8 | `focused` is there for the active client. Whether it drops is open, needs the keyboard. |
+| 9 | Yes, in event order, including three parallel Bash calls. |
+| 10 | `CLAUDE_CODE_CHILD_SESSION` is `1` in every hook, so it is useless here. The tty works: the pane's Claude has the pane's tty, a nested `claude -p` has none. A `/fork` copy has its own tty and an empty `TMUX_PANE`. |
+| 11 | Open, needs the keyboard. |
 
-Who can do what: items 1, 9 and 10 can run as `claude -p --plugin-dir` without
-help. Items 2 to 5, 11 and the rest of 8 need the user at the keyboard (approve,
-deny, Esc, `/rename`, switch apps), because `CLAUDE.md` forbids typing into a
-terminal. Prepare the logging hook first, then give the user one short list
-of steps.
+Also found:
+
+- `background_tasks[].type` is `subagent` or `shell` (decision 14 works).
+  `workflow` was not tested.
+- Hooks have no controlling tty, so reading `/dev/tty` is no shortcut for the
+  owner check.
+- A finished background task fires `UserPromptSubmit`, so the state goes back to
+  `working` until the next `Stop`.
+
+Still open: items 3, 4, 11 and the second half of 8. They need the user at the
+keyboard (approve, deny, Esc, switch apps), because `CLAUDE.md` forbids typing
+into a terminal.
 
 ## How to work
 
