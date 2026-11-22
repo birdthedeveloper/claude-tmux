@@ -4,7 +4,8 @@ A TPM-installable tmux plugin that shows the state of Claude Code per window,
 plus fork helpers and one-way name sync (Claude → window). The same repo is
 also a Claude Code plugin that ships the hooks.
 
-Status: decisions made (see below). Next step: Phase 0.
+Status: decisions made (see below). Next step: Phase 0. New session: read
+[Handoff](#handoff) at the end first.
 
 ## Context: what I found in your setup
 
@@ -51,17 +52,31 @@ Status: decisions made (see below). Next step: Phase 0.
 3. `done` is cleared when that pane gets focus.
 4. The window name follows Claude's automatic topic title. Once you rename
    the window by hand (`prefix ,`), that name is locked. The plugin never
-   overwrites it again, even if the Claude session is renamed.
+   overwrites it again, even if the Claude session is renamed. This needs no
+   wrapper around `claude`, so it stays: a plain `claude` process sets its own
+   pane title (seen live in your panes) and tmux reads it.
 5. Hooks ship as a Claude Code plugin from this same repo.
-6. The repo will be public. TPM and Claude Code both install from GitHub.
-   The key table is on `prefix A` for now (you may change it later).
+6. The repo is public (checked: anonymous `git ls-remote` works). TPM and
+   Claude Code both install from it, from the default branch (`master`). The
+   Claude plugin is named `bird-claude-tmux`, because Claude Code reserves
+   names starting with `claude-`. The key table is on `prefix A` for now (you
+   may change it later).
 7. Icons are Nerd Font glyphs.
 8. Fork variants: split right, new window, and a floating pane. No split
    below and no popup for now.
-9. Forks are named `<window>-fork`.
+9. Forks are named `<window>-fork`. An existing `-fork` suffix is stripped
+   first, so a fork of a fork keeps one suffix.
 10. If Claude finishes in the pane you are looking at, the state goes
     straight to `idle` and skips `done`.
-11. The picker is on `prefix C`.
+11. The picker is on `prefix C`: fzf in a popup, one row per Claude pane, with
+    a live preview. `ctrl-w` switches the preview between that pane and all
+    panes of its window.
+12. Every tmux option, key table and test socket name starts with
+    `bird_claude_tmux`. The repo and `claude-tmux.tmux` keep their names.
+13. While a tool waits for your approval, only a result of a tool with the same
+    name clears `needs-input`.
+14. If Claude stops while background subagents or workflows still run, the state
+    stays `working`. Background shells (e.g. a dev server) don't count.
 
 ## Goals and non-goals
 
@@ -83,41 +98,60 @@ statusline already shows them), persisting state across tmux server restarts.
 
 State is stored per pane in tmux user options. No files and no daemon.
 
-- `@claude_state`: `idle` | `working` | `needs-input` | `done`
-- `@claude_session_id`: from the hook payload, refreshed on every event
-  (it changes on `/clear`, resume and fork)
-- `@claude_cwd`: the session's `cwd` from `SessionStart`, used by fork
+- `@bird_claude_tmux_state`: `idle` | `working` | `needs-input` | `done`
+- `@bird_claude_tmux_session_id`: from the hook payload, refreshed on every
+  event (it changes on `/clear`, resume and fork)
+- `@bird_claude_tmux_cwd`: the session's `cwd` from `SessionStart`, used by fork
+- `@bird_claude_tmux_ts`: start time of the last hook that was applied, for
+  ordering (private to `hook.sh`)
+- `@bird_claude_tmux_pending`: name of the tool that waits for your approval
+  (decision 13, private to `hook.sh`)
 
-These three option names are the only contract between the Claude plugin
-(writes them) and the tmux plugin (reads them). Keep them stable.
+The first three names are the only contract between the Claude plugin (writes
+them) and the tmux plugin (reads them). Keep them stable.
 
 ### Claude Code hooks → state
 
-One dispatcher, `scripts/hook.sh`, is registered for all events. It reads
-`hook_event_name` and related fields from stdin with one `jq` call, then makes
-one `tmux set -p -t "$TMUX_PANE"` call.
+One dispatcher, `scripts/hook.sh`, is registered for all events (agreed). It
+reads `hook_event_name` and related fields from stdin with one `jq` call, then
+makes one `tmux` call that targets `$TMUX_PANE`.
 
 | Event (matcher) | New state |
 |---|---|
-| `SessionStart` | `idle`, store session id and cwd |
-| `UserPromptSubmit` | `working` |
-| `PostToolUse`, `PostToolUseFailure`, `PermissionDenied` | `working` |
-| `PreToolUse` (`AskUserQuestion\|ExitPlanMode`) | `needs-input` |
-| `PermissionRequest` | `needs-input` |
+| `SessionStart` (source `compact`) | unchanged, refresh session id and cwd |
+| `SessionStart` (other sources) | `idle`, clear pending, store session id and cwd |
+| `UserPromptSubmit` | `working`, clear pending |
+| `PostToolUse`, `PostToolUseFailure`, `PermissionDenied` | `working` and clear pending, but only if nothing is pending or the tool name matches |
+| `PreToolUse` (`AskUserQuestion\|ExitPlanMode`) | `needs-input`, pending = tool name |
+| `PermissionRequest` | `needs-input`, pending = tool name |
 | `Notification` (`permission_prompt\|elicitation_dialog`) | `needs-input` |
 | `Notification` (`idle_prompt`) | `idle`, only if still `working` (recovers from Esc) |
-| `Stop`, `StopFailure` | `done`, or `idle` if you are looking at the pane (decision 10) |
-| `SessionEnd` | unset all `@claude_*` |
+| `Stop` with a `subagent` or `workflow` in `background_tasks` | `working`, clear pending (decision 14) |
+| `Stop` (otherwise), `StopFailure` | `done`, or `idle` if you are looking at the pane (decision 10); clear pending |
+| `SessionEnd` | unset state, session id, cwd and pending (keep `_ts`) |
 
 Rules for `hook.sh`:
 
 - Exit at once when `TMUX_PANE` is empty, so sessions outside tmux are
   unaffected.
-- Always exit 0 and print nothing. Exit 2 would block tools, and stdout on
-  `SessionStart` or `UserPromptSubmit` gets injected into Claude's context.
-- Hooks run synchronously, about 10 ms each, which keeps events ordered
-  (`PostToolUse` always lands before `Stop`). Switch to `async` only if the
-  delay is noticeable, and add ordering protection then.
+- Always exit 0 and print nothing. JSON on stdout can reach Claude's context
+  on the next turn, and the synchronous `SessionEnd` must not report errors.
+- All hooks are `"async": true`: Claude starts them and does not wait, so the
+  delay per tool call is only the process spawn. The exception is
+  `SessionEnd`. It runs once per session, and Claude may exit before an async
+  hook finishes.
+- Ordering protection, because async hooks can finish out of order:
+  - The first line takes a timestamp: `ts=${EPOCHREALTIME/[.,]/}`
+    (microseconds; the separator is a comma in some locales).
+  - The write is a compare-and-set inside the tmux server:
+    `if -F '#{e|<:<stored ts or 0>,<ts>}' 'set -p ..._ts <ts> ; set -p ..._state <state>'`.
+    A hook that started earlier but lands later is dropped.
+  - Tested in tmux 3.8: 5 rounds of 60 concurrent writes in random order, the
+    newest one always won.
+- The pending check is part of the same compare-and-set condition, so it needs
+  no extra tmux call.
+- Automatic compaction fires `SessionStart` in the middle of work, which is why
+  source `compact` leaves the state alone.
 - After setting the state, refresh the status line of every attached client,
   in the same tmux call.
 - "Looking at the pane" on `Stop`: some client from
@@ -130,7 +164,16 @@ Rules for `hook.sh`:
 
 - `.claude-plugin/plugin.json` is the plugin manifest.
   `.claude-plugin/marketplace.json` makes the repo its own marketplace, with
-  one plugin whose source is `./`.
+  one plugin whose source is `./`. Anyone can install it from the public repo:
+  `claude plugin marketplace add birdthedeveloper/claude-tmux`, then
+  `claude plugin install bird-claude-tmux@bird-claude-tmux`.
+- Plugin and marketplace are both named `bird-claude-tmux`. `claude-tmux` fails
+  `claude plugin validate` (reserved). A manifest with the new name and source
+  `./` passed validation and installed from a local folder, in an isolated
+  config directory. The spelling has hyphens because the claude.ai marketplace
+  sync requires kebab-case.
+- Both manifests leave `version` out, so every push to `master` counts as an
+  update.
 - `hooks/hooks.json` registers `${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh` for
   every event in the table.
 - Claude Code copies the plugin into its own cache, so the hook path is always
@@ -142,15 +185,15 @@ Rules for `hook.sh`:
 
 ### Window aggregation: pure tmux formats
 
-The plugin defines a global option `@claude_tmux_window_icon` that holds a
-format. You embed it with `#{E:@claude_tmux_window_icon}` in the catppuccin
+The plugin defines a global option `@bird_claude_tmux_window_icon` that holds a
+format. You embed it with `#{E:@bird_claude_tmux_window_icon}` in the catppuccin
 window text. At render time, `#{P:...}` loops over the window's panes:
 
 - It considers only panes whose `pane_current_command` is `claude`. A
   `kill -9`'d or crashed Claude therefore drops out with no cleanup code.
-- A claude pane with no `@claude_state` counts as `idle`. So "Claude present"
-  works even before hooks fire, for example in sessions started before the
-  install.
+- A claude pane with no `@bird_claude_tmux_state` counts as `idle`. So "Claude
+  present" works even before hooks fire, for example in sessions started
+  before the install.
 - The result is a nested `#{?#{m:*needs-input*,...},...}` that follows the
   priority from decision 2.
 
@@ -170,25 +213,25 @@ Phase 1 checks that they render in Alacritty with your font.
 
 ### tmux side (`claude-tmux.tmux`)
 
-- Set option defaults and `@claude_tmux_window_icon`.
+- Set option defaults and `@bird_claude_tmux_window_icon`.
 - Clear `done` (decision 3): on `pane-focus-in`, `window-pane-changed`,
   `session-window-changed` and `client-session-changed`, run the tmux-native
-  command `if -F '#{==:#{@claude_state},done}' 'set -p @claude_state idle'`.
+  command `if -F '#{==:#{@bird_claude_tmux_state},done}' 'set -p @bird_claude_tmux_state idle'`.
   No shell fork.
 - Name-sync hooks on `pane-title-changed` and `window-pane-changed` (below).
 - Register hooks idempotently: strip earlier copies that match our path first,
   so `prefix r` reloads don't stack them (the same trick agent-indicator uses).
-- Add the key table (below).
+- Add the key table `bird_claude_tmux` (below).
 
 ### User options
 
 | Option | Default |
 |---|---|
-| `@claude-tmux-icon-idle` / `-working` / `-needs-input` / `-done` | see above |
-| `@claude-tmux-key` | `A` |
-| `@claude-tmux-picker-key` | `C` |
-| `@claude-tmux-sync-title` | `on` |
-| `@claude-tmux-process` | `claude` |
+| `@bird_claude_tmux_icon_idle` / `_working` / `_needs_input` / `_done` | see above |
+| `@bird_claude_tmux_key` | `A` |
+| `@bird_claude_tmux_picker_key` | `C` |
+| `@bird_claude_tmux_sync_title` | `on` |
+| `@bird_claude_tmux_process` | `claude` |
 
 ## Name sync: Claude → tmux window, with a manual lock
 
@@ -196,10 +239,10 @@ Phase 1 checks that they render in Alacritty with your font.
   becomes a spinner while it works). The title is Claude's automatic topic, or
   a name set with `/rename` or `-n`.
 - The plugin records the last name it set in a window option,
-  `@claude_tmux_synced_name`.
+  `@bird_claude_tmux_synced_name`.
 - A window is Claude-owned while either of these holds:
   - `automatic-rename` is still on, so nobody has named the window yet
-  - `window_name` equals `@claude_tmux_synced_name`, so the last rename was ours
+  - `window_name` equals `@bird_claude_tmux_synced_name`, so the last rename was ours
 - A tmux-native check runs on `pane-title-changed` and on
   `window-pane-changed`. It renames only when all of these hold:
   - the pane is the active pane and runs claude
@@ -208,10 +251,10 @@ Phase 1 checks that they render in Alacritty with your font.
   - the title is not the placeholder `Claude Code`
 
   When it renames, it runs `rename-window` and updates
-  `@claude_tmux_synced_name`.
+  `@bird_claude_tmux_synced_name`.
 - Manual lock (decision 4): after you rename with `prefix ,` (or any other
   way), `automatic-rename` is off and `window_name` no longer matches
-  `@claude_tmux_synced_name`. From then on the plugin leaves the window alone,
+  `@bird_claude_tmux_synced_name`. From then on the plugin leaves the window alone,
   even after a `/rename` in Claude.
   - A window you named before starting Claude counts as locked too.
   - This needs no rebinding of `prefix ,` and no extra state per rename.
@@ -228,13 +271,23 @@ Phase 1 checks that they render in Alacritty with your font.
 
 ## Fork keybindings
 
-- Every hook refreshes `@claude_session_id` on the pane, so the fork command is
+- Every hook refreshes `@bird_claude_tmux_session_id` on the pane, so the fork command is
   simply `claude --resume <id> --fork-session -n "<window>-fork"`. The `-n` is
-  a command-line argument, not typed input.
-- It runs in `@claude_cwd`: resume looks the session up by project directory,
-  so the right cwd matters.
-- The pane runs `claude ...; exec $SHELL`, so a shell stays after Claude exits,
-  the same as your normal panes.
+  a command-line argument, not typed input. The name is
+  `"${window%-fork}-fork"` (decision 9).
+- It runs in `@bird_claude_tmux_cwd`: resume looks the session up by project
+  directory, so the right cwd matters.
+- Claude runs inside an interactive shell (tmux's `default-shell`, zsh for
+  you), passed to tmux as separate arguments:
+  `<shell> -ic 'claude --resume "$1" --fork-session -n "$2"; exec "$0"' <shell> <id> <name>`
+  - The shell stays after Claude exits, the same as your normal panes.
+  - Your `.zshrc` is loaded, so `PATH` and aliases work.
+  - It is also required: with a plain `claude ...; exec $SHELL` string, tmux
+    reports `pane_current_command` as `zsh`, so the icon, jump, picker and name
+    sync would not see the fork. With `-ic` it is `claude` (both tested).
+  - Positional arguments need no quoting, so a window name with quotes or `$`
+    is safe (tested).
+  - Works with zsh and bash. Fish has no `$1`.
 - Forking while the original is working is fine. The fork gets the transcript
   up to that moment.
 - The new Claude fires `SessionStart` with source `fork` in its own pane, and
@@ -248,8 +301,8 @@ Phase 1 checks that they render in Alacritty with your font.
   - `f`: fork into a floating pane (new in tmux 3.8). Your default `prefix @`
     toggles floating with `break-pane -W`; Phase 0 finds the flags to create
     one directly.
-- If the pane has no Claude session, show `display-message "no Claude session
-  in this pane"`.
+- If the pane does not run claude or has no session id, show
+  `display-message "no Claude session in this pane"`.
 
 ## Extra features
 
@@ -257,10 +310,20 @@ Phase 1 checks that they render in Alacritty with your font.
    sessions. Panes in `needs-input` come first, then `done`. Pressing it
    again moves on to the next one. Implemented as `scripts/jump.sh`
    (one `list-panes -a` call, then switch client, window and pane).
-2. `prefix C` (decision 11, set by `@claude-tmux-picker-key`): picker of all
-   Claude panes with state icon and title. It is a `choose-tree -Zs` filtered
-   on the claude process, with a custom `-F`. No script needed. It replaces
+2. `prefix C` (decision 11, set by `@bird_claude_tmux_picker_key`): picker of
+   all Claude panes, `scripts/picker.sh` run by `display-popup -E`. It replaces
    your current `bind C choose-tree ...`.
+   - Rows: one `list-panes -a -f` call, filtered on the claude process. Each
+     row shows `session:window.pane`, state icon, window name and Claude title.
+     The pane id is a hidden field.
+   - Search: fzf fuzzy match over the whole visible row, so tmux session,
+     window name and Claude title all match.
+   - Preview: the pane's screen (`tmux capture-pane -ep`). `ctrl-w` (fzf's
+     delete-word by default) switches to all panes of the window, stacked with
+     a header each, and back.
+   - Enter runs `tmux switch-client -t <pane id>` (tested from an fzf popup: it
+     switches the right client, window and pane). Esc closes the popup.
+   - It only reads from panes, so the rule in `CLAUDE.md` holds.
 
 Rejected:
 
@@ -269,6 +332,9 @@ Rejected:
 - Polling Claude's internal `~/.claude/sessions/<pid>.json` (it has `status`
   and the tmux pane): it is undocumented and needs a fast status interval.
 - tmux `display-message` notifications: they vanish before you see them.
+- tmux's own pickers for `prefix C`: `switch-mode` (3.8) is fuzzy but lists only
+  sessions or windows, with no filter and no preview. `choose-tree` has a
+  preview but no fuzzy search.
 
 ## Repo layout
 
@@ -280,12 +346,14 @@ hooks/hooks.json                 Claude hooks, all pointing to hook.sh
 scripts/hook.sh                  hook dispatcher, writes pane options
 scripts/fork.sh                  fork into split / window / floating pane
 scripts/jump.sh                  jump to next attention pane
+scripts/picker.sh                fzf picker with pane / window preview
 tests/run.sh                     tests on a private tmux server
 README.md
 CLAUDE.md
 ```
 
-Requirements: tmux 3.2 or newer (format loops), bash, jq.
+Requirements: tmux 3.2 or newer (3.8 for the floating fork), bash 5 or newer
+(`EPOCHREALTIME`), jq, and fzf for the picker.
 
 ## Implementation phases
 
@@ -305,19 +373,26 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
    `needs-input` stays until the tool finishes (see Risks).
 4. Whether `idle_prompt` fires after an Esc interrupt.
 5. Whether `/rename` and `-n` change the pane title at once.
-6. Whether `#{@claude_state}` inside `#{P:}` resolves per pane, and whether
+6. Whether `#{@bird_claude_tmux_state}` inside `#{P:}` resolves per pane, and whether
    setting a pane option needs an explicit status refresh.
 7. The tmux 3.8 flags that create a floating pane directly, with a command.
 8. Whether `client_flags` contains `focused` for the client you are typing in,
    and drops it when Alacritty loses focus.
+9. Whether async hooks start in event order, including parallel tool calls
+   (log the timestamps).
+10. How `hook.sh` can tell a nested or background Claude from the one in the
+    pane (see Handoff, open design gap).
+11. Which event fires when you deny a permission with "No". If none does,
+    `needs-input` stays until `Stop` or your next prompt. Then check whether
+    `idle_prompt` may reset it too.
 
 ### Phase 1: status indicator (MVP)
 
 - `hook.sh`, `.claude-plugin/` manifests, `hooks/hooks.json`, and
   `claude-tmux.tmux` (options, focus reset, window icon format).
-- Tests: a private server (`tmux -L claude-tmux-test -f /dev/null`), a fake
+- Tests: a private server (`tmux -L bird_claude_tmux_test -f /dev/null`), a fake
   `claude` process (a symlink to `sleep`), and fixture JSON piped into
-  `hook.sh`. Each test asserts `display -p '#{E:@claude_tmux_window_icon}'`.
+  `hook.sh`. Each test asserts `display -p '#{E:@bird_claude_tmux_window_icon}'`.
   Cases:
   - each state
   - mixed priority across panes
@@ -325,14 +400,22 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
   - `join-pane` between windows
   - done reset on focus
   - `Stop` in the focused pane gives `idle`, not `done`
+  - a late hook with an older timestamp is dropped
+  - `SessionStart` with source `compact` keeps `working`
+  - while a permission is pending, a result of another tool keeps
+    `needs-input`, and a result of the same tool clears it
+  - `Stop` with a running subagent keeps `working`, with only a background
+    shell it gives `done`
 - Checks: shellcheck on all scripts, `claude plugin validate .`, and that the
-  Nerd Font icons render in your terminal.
+  Nerd Font icons render in your terminal. The validator also notes that the
+  official plugin directory would refuse the name; we don't submit there.
 - Done when: your example (one pane done plus one needing input gives "needs
   input") passes as a test and works live.
 
 ### Phase 2: fork bindings
 
-`fork.sh` and the `prefix A` key table (`|`, `c`, `f`).
+`fork.sh` and the `prefix A` key table (`|`, `c`, `f`). Test: forking from a
+window named `x-fork` names the fork `x-fork`.
 
 ### Phase 3: name sync
 
@@ -347,22 +430,28 @@ Write a throwaway hook that logs stdin and env to the scratchpad, load it with
 
 ### Phase 4: jump and picker
 
-`jump.sh` and the picker binding on `prefix C`.
+`jump.sh`, `picker.sh` and the picker binding on `prefix C`.
 
 ### Phase 5: publish and switch your config
 
-Push, make the repo public, then follow "Install in your setup".
+Merge to `master` and push (the repo is already public), then follow "Install
+in your setup".
 
 ## Install in your setup
 
-The repo must be public: TPM clones over https without credentials.
+The repo is public, so TPM and Claude Code clone it without credentials.
+
+`~/.config/tmux/tmux.conf` and `~/.claude/settings.json` are symlinks into the
+`linux-distro-settings` repo. Step 1 edits that repo, and `claude plugin` writes
+to the tracked settings file, so commit both changes there. Check afterwards
+that `settings.json` is still a symlink.
 
 1. In `~/.config/tmux/tmux.conf`:
    - remove `set -g @plugin 'accessd/tmux-agent-indicator'` and the five
      `@agent-indicator-*` lines
    - add `set -g @plugin 'birdthedeveloper/claude-tmux'`
    - add the icon to both catppuccin text lines (they must stay before `run`):
-     `set -g @catppuccin_window_text " #{window_name}#{E:@claude_tmux_window_icon}#{?window_zoomed_flag, [Z],}"`
+     `set -g @catppuccin_window_text " #{window_name}#{E:@bird_claude_tmux_window_icon}#{?window_zoomed_flag, [Z],}"`
      and the same for `@catppuccin_window_current_text`
    - drop `bind-key C choose-tree ...` (the plugin binds `prefix C` to the
      picker)
@@ -375,12 +464,12 @@ The repo must be public: TPM clones over https without credentials.
    GitHub.
 4. Install the Claude plugin, then restart your running Claude sessions:
    `claude plugin marketplace add birdthedeveloper/claude-tmux`, then
-   `claude plugin install claude-tmux@claude-tmux` (or use `/plugin` inside
+   `claude plugin install bird-claude-tmux@bird-claude-tmux` (or use `/plugin` inside
    Claude).
 5. Check: start Claude in a pane, send a prompt, and watch the window icon go
    from working to done.
 6. Updates: `prefix U` for the tmux side, and
-   `claude plugin update claude-tmux@claude-tmux` for the hooks. Update both
+   `claude plugin update bird-claude-tmux@bird-claude-tmux` for the hooks. Update both
    together.
 
 ## Risks and known limitations
@@ -396,5 +485,94 @@ The repo must be public: TPM clones over https without credentials.
   The shared contract is just three pane option names, which keeps the risk
   small.
 - Launching Claude through a wrapper (`node`, `npx`) changes
-  `pane_current_command`. That is what `@claude-tmux-process` is for.
-- About 10 ms of synchronous hook time per tool call.
+  `pane_current_command`. That is what `@bird_claude_tmux_process` is for.
+- Async hooks do not delay Claude, but each still costs a short background
+  process (about 5 ms measured for bash, jq and tmux).
+- The ordering guard compares hook start times. Two events within about a
+  millisecond of each other could still swap.
+- Two parallel calls of the same tool: the one that finishes clears
+  `needs-input` while the other still waits for approval (accepted with
+  decision 13).
+- Ctrl-Z in a forked pane: the shell moves on to `exec`, so the stopped Claude
+  cannot be brought back with `fg`.
+
+# Handoff
+
+Written 2026-11-22 for the next Claude session.
+
+## Where things stand
+
+- No code exists yet, only `PLAN.md`, `CLAUDE.md` and a `README.md`, on branch
+  `plan`. `master` has just the initial commit.
+- Decisions 1 to 14 are final, don't reopen them. All review comments are
+  resolved and the user has no open questions.
+- Ready for Phase 0: yes. Ready for Phase 1: once the gap below is closed.
+
+## Open design gap (close it in Phase 0, item 10)
+
+Another Claude can write to the wrong pane. Subprocesses of Claude inherit
+`TMUX_PANE` (checked in the Bash tool), so a `claude -p` started by Claude would
+overwrite the pane's state and session id, and its `SessionEnd` would unset
+them. The background copy made by `/fork` may do the same. Find a cheap way for
+`hook.sh` to ignore these. Candidates:
+
+- `CLAUDE_CODE_CHILD_SESSION` is set only in hooks of nested sessions
+- the owning Claude (`CLAUDE_PID`) does not have the pane's tty
+
+## Phase 0: what is already answered
+
+- Item 6, first half: yes, pane options resolve per pane inside `#{P:}`. Still
+  open: whether setting one needs an explicit status refresh.
+- Item 7: `new-pane [-x -y -X -Y] <command>` creates a floating pane directly
+  (man page, not run yet).
+- Item 8, first half: yes, `client_flags` shows `focused` for the active
+  client. Still open: whether it drops when Alacritty loses focus.
+- Item 2, partly: the docs say `PreToolUse` fires for `AskUserQuestion`. Whether
+  `PermissionRequest` fires too is open.
+- Item 4, hint: the docs say `idle_prompt` comes 60 s after Claude finishes
+  responding, only if you have not typed and no background agent is running.
+  Esc is not mentioned.
+- Untouched: items 1, 3, 5, 9, 10 and 11.
+
+Who can do what: items 1, 9 and 10 can run as `claude -p --plugin-dir` without
+help. Items 2 to 5, 11 and the rest of 8 need the user at the keyboard (approve,
+deny, Esc, `/rename`, switch apps), because `CLAUDE.md` forbids typing into a
+terminal. Prepare the logging hook first, then give the user one short list
+of steps.
+
+## How to work
+
+1. Create branch `implement` from `plan`.
+2. Run Phase 0 and write the results into this plan, including the fix for the
+   gap.
+3. Do Phases 1 to 5 in order, each with its tests passing.
+4. After every phase, including Phase 0: make one local commit, then stop and
+   wait for the user's go-ahead.
+
+- Don't push or merge unless the user asks. Phase 5 is publishing, so it needs
+  an explicit go-ahead.
+- Don't touch `tmux.conf`, `~/.claude/settings.json` or the live tmux server's
+  options before Phase 5. The development loop changes the live server, so ask
+  before running it.
+- ShellCheck 0.11.0 is installed.
+
+## Gotchas found while testing
+
+- In Claude's Bash tool `tmux` is a zsh alias that fails with exit code 127 and
+  no message. Use `command tmux`, or put the commands in a bash script.
+- The Bash tool runs inside the live tmux. Tests must use
+  `env -u TMUX -u TMUX_PANE tmux -L bird_claude_tmux_test ...`, and kill that
+  server at the end.
+- Call a fake `claude` by absolute path. A stub placed first in `PATH` was not
+  picked up by `zsh -ic`, and the real Claude started.
+- A fake `claude` must be a binary (a symlink to `sleep`). A bash script shows
+  up as `bash` in `pane_current_command`.
+- Tests that need an attached client (popup, focus) work with python's
+  `pty.fork()` plus `tmux -L ... attach`. Using `script` with redirected stdin
+  did not attach.
+- Pass `-t` to the inner `set -p` commands of `if -F` too. All tests did that.
+- tmux keeps pane hooks apart: `pane-focus-in` is listed by `show-hooks -gw`,
+  `client-session-changed` by `show-hooks -g`. The idempotent cleanup must look
+  in both.
+- Test plugin installs with `CLAUDE_CONFIG_DIR=<temp dir>`, so the real
+  settings stay untouched.
