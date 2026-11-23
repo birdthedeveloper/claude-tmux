@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# TPM entrypoint: option defaults, the window icon format and the done reset.
+# TPM entrypoint: option defaults, the window icon format, tmux hooks and key bindings.
 o=@bird_claude_tmux
+dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # Sets a global option unless the user already set it.
 default() { [[ -n $(tmux show -gqv "$1") ]] || tmux set -g "$1" "$2"; }
@@ -11,6 +12,7 @@ default ${o}_icon_working $'\xef\x89\x92'
 default ${o}_icon_needs_input $'\xef\x81\x99'
 default ${o}_icon_done $'\xef\x81\x98'
 default ${o}_process claude
+default ${o}_key A
 
 # One word per Claude pane of the window: its state, or idle before any hook.
 states="#{P:#{?#{==:#{pane_current_command},#{${o}_process}},#{?#{${o}_state},#{${o}_state},idle} ,}}"
@@ -22,3 +24,9 @@ reset="if -F '#{==:#{${o}_state},done}' 'set -p ${o}_state idle'"
 for h in pane-focus-in window-pane-changed session-window-changed client-session-changed; do
   tmux set-hook -g "${h}[4247]" "$reset"
 done
+
+# Key table on prefix + @bird_claude_tmux_key; fork variants (decision 8).
+tmux bind-key "$(tmux show -gv ${o}_key)" switch-client -T bird_claude_tmux
+tmux bind-key -T bird_claude_tmux '|' run-shell -b "'$dir/scripts/fork.sh' split '#{pane_id}' '#{client_name}'"
+tmux bind-key -T bird_claude_tmux c run-shell -b "'$dir/scripts/fork.sh' window '#{pane_id}' '#{client_name}'"
+tmux bind-key -T bird_claude_tmux f run-shell -b "'$dir/scripts/fork.sh' float '#{pane_id}' '#{client_name}'"

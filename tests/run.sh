@@ -247,6 +247,62 @@ load
 expect "a reload keeps user icons" t:0 " X"
 assert "a reload doesn't stack hooks" test "$( (tm show-hooks -g; tm show-hooks -gw) | grep -c bird_claude_tmux)" = 4
 
+echo "# fork"
+# Stand-ins for the user's shell and claude: the stub logs its cwd and args, the real one never runs.
+mkdir -p "$tmp/bin" "$tmp/proj"
+printf '%s\n' '#!/usr/bin/env bash' "printf '%s\n' \"\$PWD\" \"\$@\" >\"$tmp/fork-\$TMUX_PANE.log\"" 'exec sleep 1000' >"$tmp/bin/claude"
+# shellcheck disable=SC2016
+printf '%s\n' '#!/usr/bin/env bash' '[[ $1 == -ic ]] || exec /bin/sh "$@"' "PATH=\"$tmp/bin:\$PATH\" exec bash -c \"\${@:2}\"" >"$tmp/shell"
+chmod +x "$tmp/bin/claude" "$tmp/shell"
+forksetup() {
+  setup
+  rm -f "${tmp:?}"/fork-*.log
+  tm set -g default-shell "$tmp/shell"
+  tm rename-window -t t:0 "$1"
+  tm set -p -t %0 @bird_claude_tmux_session_id s-1 \; set -p -t %0 @bird_claude_tmux_cwd "$tmp/proj"
+}
+fork() { env -u TMUX_PANE TMUX="$sockpath,0,0" bash "$root/scripts/fork.sh" "$@"; }
+newest() { tm list-panes -a -F '#{pane_id}' | tr -d % | sort -n | tail -1 | sed 's/^/%/'; }
+forklog() {
+  for _ in {1..100}; do
+    [[ -s $tmp/fork-$1.log ]] && { cat "$tmp/fork-$1.log"; return; }
+    sleep 0.02
+  done
+}
+forksetup x
+fork split %0
+p=$(newest)
+assert "split: claude gets --resume, --fork-session and the name x-fork" \
+  test "$(forklog "$p")" = "$(printf '%s\n' "$tmp/proj" --resume s-1 --fork-session -n x-fork)"
+assert "split: the fork sits right of the original" test "$(tm display -p -t "$p" '#{window_index} #{pane_floating_flag} #{e|>:#{pane_left},0}')" = "0 0 1"
+forksetup x-fork
+tm new-window -d -t t:5 "$plain"
+fork window %0
+p=$(newest)
+assert "window: a fork of x-fork is named x-fork" test "$(forklog "$p" | tail -1)" = x-fork
+assert "window: right after the current one, automatic-rename on" test "$(tm display -p -t "$p" '#{window_index} #{automatic-rename}')" = "1 1"
+forksetup x
+fork float %0
+p=$(newest)
+assert "float: a floating pane in the same window" test "$(tm display -p -t "$p" '#{window_index} #{pane_floating_flag}')" = "0 1"
+assert "float: it runs in the session's cwd" test "$(forklog "$p" | head -1)" = "$tmp/proj"
+forksetup "a'b \"c\" \$d"
+tm set -pu -t %0 @bird_claude_tmux_cwd
+fork split %0
+p=$(newest)
+assert "a window name with quotes and \$ survives" test "$(forklog "$p" | tail -1)" = "a'b \"c\" \$d-fork"
+assert "without a stored cwd it uses the pane's path" test "$(forklog "$p" | head -1)" = "$(tm display -p -t %0 '#{pane_current_path}')"
+forksetup x
+tm set -pu -t %0 @bird_claude_tmux_session_id
+tm split-window -d -t t:0 "$plain"
+tm set -p -t %1 @bird_claude_tmux_session_id s-2
+n=$(tm list-panes -a | wc -l)
+fork split %0 2>/dev/null
+fork split %1 2>/dev/null
+assert "no fork without a session id, or from a pane without Claude" test "$(tm list-panes -a | wc -l)" = "$n"
+assert "prefix A opens the key table" grep -q 'switch-client -T bird_claude_tmux' <<<"$(tm list-keys -T prefix A)"
+assert "the table has | c f" test "$(tm list-keys -T bird_claude_tmux | grep -c "fork.sh' \(split\|window\|float\)")" = 3
+
 echo
 if ((fails)); then echo "$fails failed"; exit 1; fi
 echo "all passed"
