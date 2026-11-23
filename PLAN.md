@@ -4,8 +4,8 @@ A TPM-installable tmux plugin that shows the state of Claude Code per window,
 plus fork helpers and one-way name sync (Claude → window). The same repo is
 also a Claude Code plugin that ships the hooks.
 
-Status: decisions made (see below). Next step: Phase 0. New session: read
-[Handoff](#handoff) at the end first.
+Status: decisions made (see below), Phase 0 done. Next step: Phase 1. New
+session: read [Handoff](#handoff) at the end first.
 
 ## Context: what I found in your setup
 
@@ -125,7 +125,6 @@ makes one `tmux` call that targets `$TMUX_PANE`.
 | `PreToolUse` (`AskUserQuestion\|ExitPlanMode`) | `needs-input`, pending = tool name |
 | `PermissionRequest` | `needs-input`, pending = tool name |
 | `Notification` (`permission_prompt\|elicitation_dialog`) | `needs-input` |
-| `Notification` (`idle_prompt`) | `idle`, only if still `working` (recovers from Esc) |
 | `Stop` with a `subagent` or `workflow` in `background_tasks` | `working`, clear pending (decision 14) |
 | `Stop` (otherwise), `StopFailure` | `done`, or `idle` if you are looking at the pane (decision 10); clear pending |
 | `SessionEnd` | unset state, session id, cwd and pending (keep `_ts`) |
@@ -479,10 +478,12 @@ that `settings.json` is still a symlink.
 
 ## Risks and known limitations
 
-- After Esc, the icon can show `working` for up to about 60 s, until
-  `idle_prompt` fires or you send the next prompt.
-- After you approve a permission, `needs-input` may stay until that tool
-  finishes, unless Phase 0 finds an event that fires on approval.
+- After Esc, No, or Esc at a permission dialog, the icon keeps `working` or
+  `needs-input` until your next prompt in that pane. No hook fires on an
+  interrupt, and `idle_prompt` doesn't either. While it lasts, `prefix A j`
+  can jump back to that pane.
+- After you approve a permission, `needs-input` stays until that tool
+  finishes. No hook fires on approval.
 - Undocumented behavior we rely on (Phase 0 checks it): `TMUX_PANE` reaching
   hooks, and the `✳ <title>` pane title format. A title format change breaks
   name sync only, not the status icon.
@@ -503,16 +504,15 @@ that `settings.json` is still a symlink.
 
 # Handoff
 
-Written 2026-11-22 for the next Claude session.
+Written 2026-11-22 for the next Claude session, updated 2026-11-23.
 
 ## Where things stand
 
 - No code exists yet, only `PLAN.md`, `CLAUDE.md` and a `README.md`, on branch
-  `plan`. `master` has just the initial commit.
+  `implement`. `master` has just the initial commit.
 - Decisions 1 to 14 are final, don't reopen them. All review comments are
   resolved and the user has no open questions.
-- Phase 0 is running on branch `implement`. Ready for Phase 1: once the keyboard
-  items below are answered.
+- Phase 0 is done on branch `implement`, all items answered. Next: Phase 1.
 
 ## Design gap: closed (Phase 0, item 10)
 
@@ -527,15 +527,15 @@ Run on Claude Code 2.1.323 and tmux 3.8, on a private tmux server.
 |---|---|
 | 1 | Yes, hooks inherit `TMUX_PANE`. |
 | 2 | Both tools fire `PreToolUse` and, about 25 ms later, `PermissionRequest`, each with its tool name. Tested in modes `default` and `plan`. |
-| 3 | Open, needs the keyboard. |
-| 4 | Open, needs the keyboard. After a normal `Stop`, `idle_prompt` came 60 s later. |
+| 3 | No. Nothing fires between your Yes and `PostToolUse`. |
+| 4 | No. Esc while working fires no hook, and no `idle_prompt` came within 109 s. After a normal `Stop`, `idle_prompt` comes 60 s later. |
 | 5 | Yes, both at once. `/rename` was tested as a start prompt. The glyph stayed `✳` while working, no spinner was seen. |
 | 6 | Yes, per pane. No explicit refresh needed. |
 | 7 | `new-pane -x 60% -y 60% -c <cwd> <shell> -ic ...` works, including separate arguments. |
-| 8 | `focused` is there for the active client. Whether it drops is open, needs the keyboard. |
+| 8 | Yes. `focused` is there for the active client, drops when Alacritty loses focus and comes back with it. |
 | 9 | Yes, in event order, including three parallel Bash calls. |
 | 10 | `CLAUDE_CODE_CHILD_SESSION` is `1` in every hook, so it is useless here. The tty works: the pane's Claude has the pane's tty, a nested `claude -p` has none. A `/fork` copy has its own tty and an empty `TMUX_PANE`. |
-| 11 | Open, needs the keyboard. |
+| 11 | None. No and Esc at the dialog both act as an interrupt ("What should Claude do instead?"): no `PermissionDenied`, no `Stop`, and no `idle_prompt` within 2 min. |
 
 Also found:
 
@@ -545,10 +545,16 @@ Also found:
   owner check.
 - A finished background task fires `UserPromptSubmit`, so the state goes back to
   `working` until the next `Stop`.
+- `idle_prompt` fires only after a completed turn, when the state is already
+  `done` or `idle`, so the hook table ignores it. Its delay is the undocumented
+  `messageIdleNotifThresholdMs` in `~/.claude.json` (default 60000).
+- Claude sends an internal `SubagentStop` (empty `agent_type`) about 1 s after
+  each `Stop`. The hook table ignores `SubagentStop`.
+- Claude emits OSC 9;4 progress (tmux 3.8 `pane_pb_state`) only for Ghostty,
+  iTerm2 and ConEmu, so it's no working signal inside tmux.
 
-Still open: items 3, 4, 11 and the second half of 8. They need the user at the
-keyboard (approve, deny, Esc, switch apps), because `CLAUDE.md` forbids typing
-into a terminal. The steps are in `PLAN-phase0-keyboard.md`.
+Items 3, 4, 11 and the second half of 8 were run by the user at the keyboard,
+with a throwaway hook logger.
 
 ## How to work
 
