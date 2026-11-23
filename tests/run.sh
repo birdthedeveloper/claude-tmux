@@ -435,8 +435,8 @@ status_is() {
   done
   fail "$name: want [$want] got [$got]"
 }
-# The round pill: left cap, icon on the colour, right cap.
-pill() { printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=black]#[bg=%s]%s #[fg=%s]#[bg=default]\xee\x82\xb4#[default] ' "$1" "$1" "$2" "$1"; }
+# The segment: a round left cap, the icon on the colour, then the text part.
+pill() { printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=black]#[bg=%s]%s #[%s] claude #[default] ' "$1" "$1" "$2" "${3:-default}"; }
 ok=$(pill green I)
 wait=$(pill colour208 N)
 status_is "a session with Claude shows the green icon" t: "$ok"
@@ -453,6 +453,8 @@ status_is "in that session it does" u: "$wait"
 status_is "a session without Claude shows nothing" v: ""
 tm set -g @thm_peach '#fab387' \; set -g @bird_claude_tmux_color_wait '#{@thm_peach}'
 status_is "a colour option may hold a format" u: "$(pill '#fab387' N)"
+tm set -g @bird_claude_tmux_status_text_style 'fg=#{@thm_peach},bg=blue'
+status_is "the text style may hold a comma and a format" u: "$(pill '#fab387' N 'fg=#fab387,bg=blue')"
 
 echo "# needs-input message"
 setup

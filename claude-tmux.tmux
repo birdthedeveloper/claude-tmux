@@ -18,6 +18,8 @@ default ${o}_sync_title on
 default ${o}_color_ok green
 default ${o}_color_wait colour208
 default ${o}_color_icon black
+default ${o}_status_text claude
+default ${o}_status_text_style default
 
 # One word per Claude pane of the window: its state, or idle before any hook.
 states="#{P:#{?#{==:#{pane_current_command},#{${o}_process}},#{?#{${o}_state},#{${o}_state},idle} ,}}"
@@ -26,11 +28,12 @@ tmux set -g ${o}_window_icon "$(branch needs-input)$(branch 'done')$(branch work
 
 # Decision 15: status-right segment for the current session; hidden without Claude, orange while one needs input.
 session="#{W:$states}"
-# A round pill like catppuccin's modules; E: lets colours be formats such as '#{@thm_green}', and no commas inside #{?}.
+# Like catppuccin's modules: round left cap, icon on the colour, then the text part.
+# E: lets options be formats such as '#{@thm_green}'; commas only in expanded values, never raw inside #{?}.
 paint() {
   local c="#{E:${o}_color_$1}"
-  printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=#{E:%s_color_icon}]#[bg=%s]#{%s_icon_%s} #[fg=%s]#[bg=default]\xee\x82\xb4#[default] ' \
-    "$c" "$o" "$c" "$o" "$2" "$c"
+  printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=#{E:%s_color_icon}]#[bg=%s]#{%s_icon_%s} #[#{E:%s_status_text_style}] #{%s_status_text} #[default] ' \
+    "$c" "$o" "$c" "$o" "$2" "$o" "$o"
 }
 tmux set -g ${o}_status "#{?#{m:*needs-input*,$session},$(paint wait needs_input),#{?$session,$(paint ok idle),}}"
 

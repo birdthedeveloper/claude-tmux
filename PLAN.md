@@ -80,8 +80,9 @@ New session: read [Handoff](#handoff) at the end first.
 15. A status segment for `status-right`, `#{E:@bird_claude_tmux_status}`, covers
     the current session. It is hidden without a Claude pane there. Otherwise it
     shows the idle icon in green, or the needs-input icon in orange while any
-    Claude pane of the session needs input (`done` stays green). Icon only, on
-    a round pill like catppuccin's modules (round caps U+E0B6 and U+E0B4).
+    Claude pane of the session needs input (`done` stays green). Built like
+    catppuccin's modules: a round left cap (U+E0B6), the icon on the colour,
+    then a text part (`claude` by default).
 16. When a pane changes into `needs-input` and you are not looking at it, a
     status-line message shows for 4 s: `Claude needs input in
     <session>:<window> <name> (<tool>)`. Never for `done`.
@@ -247,6 +248,7 @@ Phase 1 checks that they render in Alacritty with your font.
 | `@bird_claude_tmux_sync_title` | `on` |
 | `@bird_claude_tmux_process` | `claude` |
 | `@bird_claude_tmux_color_ok` / `_color_wait` / `_color_icon` | `green` / `colour208` / `black` |
+| `@bird_claude_tmux_status_text` / `_status_text_style` | `claude` / `default` |
 
 ## Name sync: Claude → tmux window, with a manual lock
 
@@ -478,7 +480,9 @@ that `settings.json` is still a symlink.
    - add the status segment to `status-right` (decision 15), with catppuccin
      colours: `set -g @bird_claude_tmux_color_ok '#{@thm_green}'`,
      `set -g @bird_claude_tmux_color_wait '#{@thm_peach}'`,
-     `set -g @bird_claude_tmux_color_icon '#{@thm_crust}'`, and
+     `set -g @bird_claude_tmux_color_icon '#{@thm_crust}'`,
+     `set -g @bird_claude_tmux_status_text_style 'fg=#{@thm_fg},bg=#{@thm_surface_0}'`,
+     and
      `#{E:@bird_claude_tmux_status}` in `status-right`
    - drop `bind-key C choose-tree ...` (the plugin binds `prefix C` to the
      picker)
