@@ -1,0 +1,13 @@
+{
+  "name": "bird-claude-tmux",
+  "owner": {
+    "name": "birdthedeveloper"
+  },
+  "plugins": [
+    {
+      "name": "bird-claude-tmux",
+      "source": "./",
+      "description": "Hooks for claude-tmux: write the Claude Code state into tmux pane options, so the tmux plugin can show it per window."
+    }
+  ]
+}

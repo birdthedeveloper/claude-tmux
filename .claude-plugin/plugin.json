@@ -1,0 +1,9 @@
+{
+  "name": "bird-claude-tmux",
+  "description": "Hooks for claude-tmux: write the Claude Code state into tmux pane options, so the tmux plugin can show it per window.",
+  "author": {
+    "name": "birdthedeveloper"
+  },
+  "homepage": "https://github.com/birdthedeveloper/claude-tmux",
+  "repository": "https://github.com/birdthedeveloper/claude-tmux"
+}
