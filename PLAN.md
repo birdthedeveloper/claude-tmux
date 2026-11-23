@@ -4,8 +4,8 @@ A TPM-installable tmux plugin that shows the state of Claude Code per window,
 plus fork helpers and one-way name sync (Claude → window). The same repo is
 also a Claude Code plugin that ships the hooks.
 
-Status: decisions made (see below), Phase 0 done. Next step: Phase 1. New
-session: read [Handoff](#handoff) at the end first.
+Status: decisions made (see below), Phases 0 and 1 done. Next step: Phase 2.
+New session: read [Handoff](#handoff) at the end first.
 
 ## Context: what I found in your setup
 
@@ -223,8 +223,8 @@ Phase 1 checks that they render in Alacritty with your font.
   command `if -F '#{==:#{@bird_claude_tmux_state},done}' 'set -p @bird_claude_tmux_state idle'`.
   No shell fork.
 - Name-sync hooks on `pane-title-changed` and `window-pane-changed` (below).
-- Register hooks idempotently: strip earlier copies that match our path first,
-  so `prefix r` reloads don't stack them (the same trick agent-indicator uses).
+- Register hooks idempotently at the fixed array index `[4247]`, so a
+  `prefix r` reload overwrites them instead of stacking them.
 - Add the key table `bird_claude_tmux` (below).
 
 ### User options
@@ -508,11 +508,14 @@ Written 2026-11-22 for the next Claude session, updated 2026-11-23.
 
 ## Where things stand
 
-- No code exists yet, only `PLAN.md`, `CLAUDE.md` and a `README.md`, on branch
-  `implement`. `master` has just the initial commit.
+- Work happens on branch `implement`. `master` has just the initial commit.
 - Decisions 1 to 14 are final, don't reopen them. All review comments are
   resolved and the user has no open questions.
-- Phase 0 is done on branch `implement`, all items answered. Next: Phase 1.
+- Phase 0 is done, all items answered.
+- Phase 1 is done: `tests/run.sh` passes, and the user confirmed the icons and
+  the live check. The live server still has the plugin loaded (6 options, 4
+  hooks at `[4247]`, icon added to both window status formats); `prefix r`
+  restores the formats. Next: Phase 2.
 
 ## Design gap: closed (Phase 0, item 10)
 
@@ -579,6 +582,9 @@ with a throwaway hook logger.
 - The Bash tool runs inside the live tmux. Tests must use
   `env -u TMUX -u TMUX_PANE tmux -L bird_claude_tmux_test ...`, and kill that
   server at the end.
+- A `TMUX` value with an empty socket path (`TMUX=,0,0`) makes tmux use the
+  live server. `tests/run.sh` aborts unless the test socket path is known. It
+  also waits for a killed test server to exit before starting the next one.
 - Call a fake `claude` by absolute path. A stub placed first in `PATH` was not
   picked up by `zsh -ic`, and the real Claude started.
 - A fake `claude` must be a binary (a symlink to `sleep`). A bash script shows
