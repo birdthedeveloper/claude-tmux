@@ -29,6 +29,13 @@ looking() {
   return 1
 }
 
+# Decision 16: a status-line message when the pane starts to need input, unless you look at it.
+notify() {
+  looking && return
+  printf "if -F -t %s '#{!=:#{%s_state},needs-input}' \"display-message -t %s -d 4000 'Claude needs input in #{session_name}:#{window_index} #{window_name}%s'\" ; " \
+    "$p" "$o" "$p" "${tool:+ ($tool)}"
+}
+
 cond=1
 case $event in
   SessionStart)
@@ -46,11 +53,11 @@ case $event in
   PreToolUse | PermissionRequest)
     [[ -n $tool ]] || exit 0
     [[ $event == PermissionRequest || $tool == AskUserQuestion || $tool == ExitPlanMode ]] || exit 0
-    cmd="set -p -t $p ${o}_state needs-input ; set -p -t $p ${o}_pending $tool"
+    cmd="$(notify)set -p -t $p ${o}_state needs-input ; set -p -t $p ${o}_pending $tool"
     ;;
   Notification)
     [[ $ntype == permission_prompt || $ntype == elicitation_dialog ]] || exit 0
-    cmd="set -p -t $p ${o}_state needs-input"
+    cmd="$(notify)set -p -t $p ${o}_state needs-input"
     ;;
   Stop | StopFailure)
     if [[ $event == Stop && $bg == true ]]; then

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# fzf picker of all Claude panes with a live preview; fzf calls back with rows, preview <pane> or toggle.
+# fzf picker of the Claude panes in the current session (decision 17); also called as rows <session>, preview <pane>, toggle.
 o=@bird_claude_tmux
 s=$'\x1f'
 
-# One line per Claude pane: the hidden pane id, a tab, then location, state icon, window name and topic.
+# One line per Claude pane of the session: the hidden pane id, a tab, then window.pane, state icon, window name and topic.
 rows() {
   local idle working needs fin id loc state name topic icon
   IFS=$s read -r idle working needs fin < <(
@@ -16,9 +16,9 @@ rows() {
       working) icon=$working ;;
       *) icon=$idle ;;
     esac
-    printf '%s\t%-12s %s  %-24s %s\n' "$id" "$loc" "$icon" "$name" "$topic"
-  done < <(tmux list-panes -a -f "#{==:#{pane_current_command},#{${o}_process}}" \
-    -F "#{pane_id}$s#{session_name}:#{window_index}.#{pane_index}$s#{${o}_state}$s#{window_name}$s#{s/^[^ -~]+ //:pane_title}")
+    printf '%s\t%-6s %s  %-24s %s\n' "$id" "$loc" "$icon" "$name" "$topic"
+  done < <(tmux list-panes -s -t "$1" -f "#{==:#{pane_current_command},#{${o}_process}}" \
+    -F "#{pane_id}$s#{window_index}.#{pane_index}$s#{${o}_state}$s#{window_name}$s#{s/^[^ -~]+ //:pane_title}")
 }
 
 # The pane's screen, or all panes of its window while the preview label says window.
@@ -44,7 +44,7 @@ toggle() {
 }
 
 case ${1:-} in
-  rows) rows; exit 0 ;;
+  rows) rows "$2"; exit 0 ;;
   preview) preview "$2"; exit 0 ;;
   toggle) toggle; exit 0 ;;
 esac
@@ -54,7 +54,9 @@ if ! command -v fzf >/dev/null; then
   exit 0
 fi
 printf -v me %q "${BASH_SOURCE[0]}"
-pick=$(rows | fzf --delimiter '\t' --with-nth 2.. --with-shell 'bash -c' --reverse \
+# Inside the popup this is the session of the client that opened it.
+session=$(tmux display -p '#{session_id}')
+pick=$(rows "$session" | fzf --delimiter '\t' --with-nth 2.. --with-shell 'bash -c' --reverse \
   --header 'enter: switch   ctrl-w: pane / window preview' \
   --preview "$me preview {1}" --preview-label ' pane ' --preview-window 'right,60%' \
   --bind "ctrl-w:transform:$me toggle")

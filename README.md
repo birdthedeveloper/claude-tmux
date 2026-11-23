@@ -5,6 +5,9 @@ work with Claude panes.
 
 - A status icon per window: idle, working, needs input, or done. If a window
   has several Claude panes, the most urgent state wins.
+- A status-right segment for the current session: green while its Claude panes
+  are fine, orange while one waits for you.
+- A short status-line message when a Claude pane starts waiting for you.
 - Fork the Claude session of a pane into a split, a new window, or a floating
   pane.
 - The window name follows Claude's session title, until you rename the window
@@ -43,6 +46,17 @@ set -g window-status-current-format " #I #{window_name}#{E:@bird_claude_tmux_win
 With catppuccin, add it to `@catppuccin_window_text` and
 `@catppuccin_window_current_text` instead, before catppuccin is loaded.
 
+The session segment goes into `status-right`. It is empty when the session has
+no Claude pane:
+
+```tmux
+set -ag status-right "#{E:@bird_claude_tmux_status}"
+```
+
+With catppuccin, you can take its colours:
+`set -g @bird_claude_tmux_color_ok '#{@thm_green}'` and
+`set -g @bird_claude_tmux_color_wait '#{@thm_peach}'`.
+
 Claude Code side:
 
 ```sh
@@ -62,9 +76,14 @@ together: `prefix U` for tmux, and
 | `prefix A` then `c` | fork it into a new window next to the current one |
 | `prefix A` then `f` | fork it into a floating pane |
 | `prefix A` then `j` | jump to the next pane that needs you (needs input first, then done); press again for the next one |
-| `prefix C` | picker of all Claude panes; `enter` switches, `ctrl-w` toggles the preview between the pane and its whole window |
+| `prefix C` | picker of the Claude panes in the current session; `enter` switches, `ctrl-w` toggles the preview between the pane and its whole window |
 
 A fork is named `<window>-fork`, and a fork of a fork keeps one `-fork`.
+
+When a pane starts to wait for you (a permission dialog, a question, a plan to
+approve), the status line shows `Claude needs input in <session>:<window>
+<name>` for 4 seconds, unless you are looking at that pane. Nothing is shown
+when Claude is done.
 
 ## Window names
 
@@ -84,6 +103,8 @@ rename the window yourself, it stays that way. To hand it back to Claude:
 | `@bird_claude_tmux_key` | `A` |
 | `@bird_claude_tmux_picker_key` | `C` |
 | `@bird_claude_tmux_sync_title` | `on` |
+| `@bird_claude_tmux_color_ok` | `green`, the session segment while nothing waits |
+| `@bird_claude_tmux_color_wait` | `colour208` (orange), the session segment while a pane needs input |
 | `@bird_claude_tmux_process` | `claude`, the process name a Claude pane runs |
 
 Set them before the plugin loads.

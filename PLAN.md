@@ -77,6 +77,15 @@ New session: read [Handoff](#handoff) at the end first.
     name clears `needs-input`.
 14. If Claude stops while background subagents or workflows still run, the state
     stays `working`. Background shells (e.g. a dev server) don't count.
+15. A status segment for `status-right`, `#{E:@bird_claude_tmux_status}`, covers
+    the current session. It is hidden without a Claude pane there. Otherwise it
+    shows the idle icon in green, or the needs-input icon in orange while any
+    Claude pane of the session needs input (`done` stays green). Icon only.
+16. When a pane changes into `needs-input` and you are not looking at it, a
+    status-line message shows for 4 s: `Claude needs input in
+    <session>:<window> <name> (<tool>)`. Never for `done`.
+17. The picker lists the Claude panes of the current session only (changes
+    decision 11).
 
 ## Goals and non-goals
 
@@ -236,6 +245,7 @@ Phase 1 checks that they render in Alacritty with your font.
 | `@bird_claude_tmux_picker_key` | `C` |
 | `@bird_claude_tmux_sync_title` | `on` |
 | `@bird_claude_tmux_process` | `claude` |
+| `@bird_claude_tmux_color_ok` / `_color_wait` | `green` / `colour208` |
 
 ## Name sync: Claude → tmux window, with a manual lock
 
@@ -314,20 +324,28 @@ Phase 1 checks that they render in Alacritty with your font.
    sessions. Panes in `needs-input` come first, then `done`. Pressing it
    again moves on to the next one. Implemented as `scripts/jump.sh`
    (one `list-panes -a` call, then switch client, window and pane).
-2. `prefix C` (decision 11, set by `@bird_claude_tmux_picker_key`): picker of
-   all Claude panes, `scripts/picker.sh` run by `display-popup -E`. It replaces
-   your current `bind C choose-tree ...`.
-   - Rows: one `list-panes -a -f` call, filtered on the claude process. Each
-     row shows `session:window.pane`, state icon, window name and Claude title.
-     The pane id is a hidden field.
-   - Search: fzf fuzzy match over the whole visible row, so tmux session,
-     window name and Claude title all match.
+2. `prefix C` (decisions 11 and 17, set by `@bird_claude_tmux_picker_key`):
+   picker of the Claude panes in the current session, `scripts/picker.sh` run
+   by `display-popup -E`. It replaces your current `bind C choose-tree ...`.
+   - Rows: one `list-panes -s -f` call for the popup client's session,
+     filtered on the claude process. Each row shows `window.pane`, state icon,
+     window name and Claude title. The pane id is a hidden field.
+   - Search: fzf fuzzy match over the whole visible row, so window name and
+     Claude title both match.
    - Preview: the pane's screen (`tmux capture-pane -ep`). `ctrl-w` (fzf's
      delete-word by default) switches to all panes of the window, stacked with
      a header each, and back.
    - Enter runs `tmux switch-client -t <pane id>` (tested from an fzf popup: it
      switches the right client, window and pane). Esc closes the popup.
    - It only reads from panes, so the rule in `CLAUDE.md` holds.
+3. Status segment (decision 15): a format built like the window icon, with a
+   `#{W:}` loop around the `#{P:}` loop. Colours: `@bird_claude_tmux_color_ok`
+   and `@bird_claude_tmux_color_wait`.
+4. Needs-input message (decision 16): `hook.sh` adds a nested
+   `if -F '#{!=:<state>,needs-input}' 'display-message ...'` before the state
+   write, so the three events of one wait (`PreToolUse`, `PermissionRequest`,
+   the 6 s notification) show it once. It goes to the most recently active
+   client and is skipped when a focused client shows the pane.
 
 Rejected:
 
@@ -335,7 +353,6 @@ Rejected:
   type into the terminal (see `CLAUDE.md`).
 - Polling Claude's internal `~/.claude/sessions/<pid>.json` (it has `status`
   and the tmux pane): it is undocumented and needs a fast status interval.
-- tmux `display-message` notifications: they vanish before you see them.
 - tmux's own pickers for `prefix C`: `switch-mode` (3.8) is fuzzy but lists only
   sessions or windows, with no filter and no preview. `choose-tree` has a
   preview but no fuzzy search.
@@ -457,6 +474,10 @@ that `settings.json` is still a symlink.
    - add the icon to both catppuccin text lines (they must stay before `run`):
      `set -g @catppuccin_window_text " #{window_name}#{E:@bird_claude_tmux_window_icon}#{?window_zoomed_flag, [Z],}"`
      and the same for `@catppuccin_window_current_text`
+   - add the status segment to `status-right` (decision 15), with catppuccin
+     colours: `set -g @bird_claude_tmux_color_ok '#{@thm_green}'`,
+     `set -g @bird_claude_tmux_color_wait '#{@thm_peach}'`, and
+     `#{E:@bird_claude_tmux_status}` in `status-right`
    - drop `bind-key C choose-tree ...` (the plugin binds `prefix C` to the
      picker)
 2. Remove the agent-indicator hooks from the running server (or restart
@@ -522,8 +543,13 @@ Written 2026-11-22 for the next Claude session, updated 2026-11-23.
   `window-pane-changed[4248]`. Not tried live yet.
 - Phase 4 is done: `jump.sh` (`prefix A j`) and `picker.sh` (`prefix C`). The
   picker is tested through `rows`, `preview` and `toggle`, and with the real
-  fzf via `FZF_DEFAULT_OPTS=--filter=...`. Not tried live yet. Next: the
-  user's live checks of Phases 2 to 4, then Phase 5.
+  fzf via `FZF_DEFAULT_OPTS=--filter=...`.
+- The user tried Phases 2 to 4 live. Fork of a fork can only be checked after
+  `claude plugin install`, because a fork started under `--plugin-dir` has no
+  hooks. PR #1 (`implement` into `master`) is open.
+- Decisions 15 to 17 (session segment, needs-input message, picker per session)
+  were added after that and are implemented with tests. The message test reads
+  what tmux draws to a pty client. Not tried live yet. Next: Phase 5.
 
 ## Design gap: closed (Phase 0, item 10)
 

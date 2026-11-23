@@ -64,9 +64,9 @@ hook() {
 ev() { hook "$1" "{\"hook_event_name\":\"$2\",\"session_id\":\"s-1\",\"cwd\":\"/tmp\"${3:+,$3}}" "${4:-}"; }
 popt() { tm show -pv -t "$1" "@bird_claude_tmux_$2" 2>/dev/null; }
 
-# Attaches a client through a pty, as a terminal would; it starts focused.
+# Attaches a client through a pty, as a terminal would; it starts focused and logs what tmux draws.
 attach() {
-  python3 - "$sock" <<'PY' &
+  python3 - "$sock" "$tmp/client.log" <<'PY' &
 import fcntl, os, pty, struct, sys, termios
 pid, fd = pty.fork()
 if pid == 0:
@@ -75,11 +75,13 @@ if pid == 0:
         os.environ.pop(k, None)
     os.environ['TERM'] = 'xterm-256color'
     os.execvp('tmux', ['tmux', '-L', sys.argv[1], 'attach', '-t', 't'])
-try:
-    while os.read(fd, 65536):
+with open(sys.argv[2], 'wb') as log:
+    try:
+        while b := os.read(fd, 65536):
+            log.write(b)
+            log.flush()
+    except OSError:
         pass
-except OSError:
-    pass
 PY
   py=$!
   for _ in {1..100}; do
@@ -403,19 +405,70 @@ st %0 needs-input
 tm new-window -d -t t:1 -n beta "$claude"
 tm new-window -d -t t:2 "$plain"
 tm split-window -d -t t:0 "$claude"
-for p in %1 %3; do runs_claude "$p"; done
+tm new-session -d -s u -n gamma "$claude"
+for p in %1 %3 %4; do runs_claude "$p"; done
 picker() { env -u TMUX_PANE TMUX="$sockpath,0,0" bash "$root/scripts/picker.sh" "$@"; }
-rows=$(picker rows)
-assert "rows: only Claude panes, pane id first" test "$(cut -f1 <<<"$rows" | tr '\n' ' ')" = "%0 %3 %1 "
-assert "rows: location, state icon and topic" grep -qE $'^%0\tt:0.0 +N +.*Topic A$' <<<"$rows"
+rows=$(picker rows t)
+assert "rows: only Claude panes of the session, pane id first" test "$(cut -f1 <<<"$rows" | tr '\n' ' ')" = "%0 %3 %1 "
+assert "rows: window.pane, state icon and topic" grep -qE $'^%0\t0.0 +N +.*Topic A$' <<<"$rows"
 assert "preview shows the pane's screen" test "$(FZF_PREVIEW_LABEL=' pane ' picker preview %0)" = "$(tm capture-pane -ep -t %0)"
 assert "window preview stacks all panes of the window" test "$(FZF_PREVIEW_LABEL=' window ' picker preview %0 | grep -c '^────')" = 2
 assert "ctrl-w switches the preview to the window" test "$(FZF_PREVIEW_LABEL=' pane ' picker toggle)" = 'change-preview-label( window )+refresh-preview'
 assert "and back to the pane" test "$(FZF_PREVIEW_LABEL=' window ' picker toggle)" = 'change-preview-label( pane )+refresh-preview'
 attach
+FZF_DEFAULT_OPTS='--filter=gamma' picker
+assert "a pane of another session can't be picked" test "$(tm list-clients -F '#{pane_id}')" = %0
 FZF_DEFAULT_OPTS='--filter=beta' picker
 assert "fzf takes the options and a pick switches the client" test "$(tm list-clients -F '#{pane_id}')" = %1
 assert "prefix C opens the picker" grep -q 'display-popup.*picker.sh' <<<"$(tm list-keys -T prefix C)"
+
+echo "# status segment"
+setup
+status() { tm display -p -t "$1" '#{E:@bird_claude_tmux_status}'; }
+# Waits up to 1 s for the segment, like expect.
+status_is() {
+  local name=$1 target=$2 want=$3 got
+  for _ in {1..50}; do
+    got=$(status "$target")
+    [[ $got == "$want" ]] && { echo "ok   $name"; return; }
+    sleep 0.02
+  done
+  fail "$name: want [$want] got [$got]"
+}
+ok=' #[fg=green]I#[fg=default] '
+wait=' #[fg=colour208]N#[fg=default] '
+status_is "a session with Claude shows the green icon" t: "$ok"
+st %0 needs-input
+status_is "orange while a pane needs input" t: "$wait"
+st %0 'done'
+status_is "done stays green" t: "$ok"
+tm new-session -d -s u "$claude"
+tm new-session -d -s v "$plain"
+runs_claude %1
+st %1 needs-input
+status_is "another session's pane doesn't count" t: "$ok"
+status_is "in that session it does" u: "$wait"
+status_is "a session without Claude shows nothing" v: ""
+tm set -g @thm_peach '#fab387' \; set -g @bird_claude_tmux_color_wait '#{@thm_peach}'
+status_is "a colour option may hold a format" u: ' #[fg=#fab387]N#[fg=default] '
+
+echo "# needs-input message"
+setup
+for w in 1 2 3; do tm new-window -d -t "t:$w" "$claude"; done
+attach
+shown() { grep -ac "Claude needs input in t:$1" "$tmp/client.log"; }
+ev %1 PermissionRequest '"tool_name":"Bash"'
+for _ in {1..50}; do [[ $(shown 1) != 0 ]] && break; sleep 0.02; done
+assert "a pane you don't look at shows the message" test "$(shown 1)" != 0
+assert "with the tool name" grep -aq 'Claude needs input in t:1 .*(Bash)' "$tmp/client.log"
+ev %0 PermissionRequest '"tool_name":"Bash"'
+st %2 needs-input
+ev %2 Notification '"notification_type":"permission_prompt"'
+ev %3 Stop
+settle
+assert "not for the pane you look at" test "$(shown 0)" = 0
+assert "not again while the pane already needs input" test "$(shown 2)" = 0
+assert "not for done" test "$(shown 3)" = 0
 
 echo
 if ((fails)); then echo "$fails failed"; exit 1; fi
