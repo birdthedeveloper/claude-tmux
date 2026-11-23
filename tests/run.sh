@@ -435,8 +435,10 @@ status_is() {
   done
   fail "$name: want [$want] got [$got]"
 }
-ok=' #[fg=green]I#[fg=default] '
-wait=' #[fg=colour208]N#[fg=default] '
+# The round pill: left cap, icon on the colour, right cap.
+pill() { printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=black]#[bg=%s]%s #[fg=%s]#[bg=default]\xee\x82\xb4#[default] ' "$1" "$1" "$2" "$1"; }
+ok=$(pill green I)
+wait=$(pill colour208 N)
 status_is "a session with Claude shows the green icon" t: "$ok"
 st %0 needs-input
 status_is "orange while a pane needs input" t: "$wait"
@@ -450,7 +452,7 @@ status_is "another session's pane doesn't count" t: "$ok"
 status_is "in that session it does" u: "$wait"
 status_is "a session without Claude shows nothing" v: ""
 tm set -g @thm_peach '#fab387' \; set -g @bird_claude_tmux_color_wait '#{@thm_peach}'
-status_is "a colour option may hold a format" u: ' #[fg=#fab387]N#[fg=default] '
+status_is "a colour option may hold a format" u: "$(pill '#fab387' N)"
 
 echo "# needs-input message"
 setup

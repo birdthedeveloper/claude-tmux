@@ -17,6 +17,7 @@ default ${o}_picker_key C
 default ${o}_sync_title on
 default ${o}_color_ok green
 default ${o}_color_wait colour208
+default ${o}_color_icon black
 
 # One word per Claude pane of the window: its state, or idle before any hook.
 states="#{P:#{?#{==:#{pane_current_command},#{${o}_process}},#{?#{${o}_state},#{${o}_state},idle} ,}}"
@@ -25,8 +26,12 @@ tmux set -g ${o}_window_icon "$(branch needs-input)$(branch 'done')$(branch work
 
 # Decision 15: status-right segment for the current session; hidden without Claude, orange while one needs input.
 session="#{W:$states}"
-# E: lets a colour option hold a format, such as '#{@thm_green}' from catppuccin.
-paint() { printf ' #[fg=#{E:%s_color_%s}]#{%s_icon_%s}#[fg=default] ' "$o" "$1" "$o" "$2"; }
+# A round pill like catppuccin's modules; E: lets colours be formats such as '#{@thm_green}', and no commas inside #{?}.
+paint() {
+  local c="#{E:${o}_color_$1}"
+  printf '#[fg=%s]#[bg=default]\xee\x82\xb6#[fg=#{E:%s_color_icon}]#[bg=%s]#{%s_icon_%s} #[fg=%s]#[bg=default]\xee\x82\xb4#[default] ' \
+    "$c" "$o" "$c" "$o" "$2" "$c"
+}
 tmux set -g ${o}_status "#{?#{m:*needs-input*,$session},$(paint wait needs_input),#{?$session,$(paint ok idle),}}"
 
 # Clears done on the pane that gets focus (decision 3); the fixed index makes reloads idempotent.

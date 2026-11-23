@@ -5,8 +5,9 @@ work with Claude panes.
 
 - A status icon per window: idle, working, needs input, or done. If a window
   has several Claude panes, the most urgent state wins.
-- A status-right segment for the current session: green while its Claude panes
-  are fine, orange while one waits for you.
+- A status-right segment for the current session, a round pill like
+  catppuccin's modules: green while its Claude panes are fine, orange while one
+  waits for you.
 - A short status-line message when a Claude pane starts waiting for you.
 - Fork the Claude session of a pane into a split, a new window, or a floating
   pane.
@@ -54,8 +55,12 @@ set -ag status-right "#{E:@bird_claude_tmux_status}"
 ```
 
 With catppuccin, you can take its colours:
-`set -g @bird_claude_tmux_color_ok '#{@thm_green}'` and
-`set -g @bird_claude_tmux_color_wait '#{@thm_peach}'`.
+
+```tmux
+set -g @bird_claude_tmux_color_ok '#{@thm_green}'
+set -g @bird_claude_tmux_color_wait '#{@thm_peach}'
+set -g @bird_claude_tmux_color_icon '#{@thm_crust}'
+```
 
 Claude Code side:
 
@@ -105,6 +110,7 @@ rename the window yourself, it stays that way. To hand it back to Claude:
 | `@bird_claude_tmux_sync_title` | `on` |
 | `@bird_claude_tmux_color_ok` | `green`, the session segment while nothing waits |
 | `@bird_claude_tmux_color_wait` | `colour208` (orange), the session segment while a pane needs input |
+| `@bird_claude_tmux_color_icon` | `black`, the icon on the session segment |
 | `@bird_claude_tmux_process` | `claude`, the process name a Claude pane runs |
 
 Set them before the plugin loads.
