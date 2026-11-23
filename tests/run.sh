@@ -245,7 +245,7 @@ assert "default done icon is nf-fa-check_circle" test "$(tm show -gv @bird_claud
 tm set -g @bird_claude_tmux_icon_idle X
 load
 expect "a reload keeps user icons" t:0 " X"
-assert "a reload doesn't stack hooks" test "$( (tm show-hooks -g; tm show-hooks -gw) | grep -c bird_claude_tmux)" = 4
+assert "a reload doesn't stack hooks" test "$( (tm show-hooks -g; tm show-hooks -gw) | grep -c bird_claude_tmux)" = 6
 
 echo "# fork"
 # Stand-ins for the user's shell and claude: the stub logs its cwd and args, the real one never runs.
@@ -302,6 +302,70 @@ fork split %1 2>/dev/null
 assert "no fork without a session id, or from a pane without Claude" test "$(tm list-panes -a | wc -l)" = "$n"
 assert "prefix A opens the key table" grep -q 'switch-client -T bird_claude_tmux' <<<"$(tm list-keys -T prefix A)"
 assert "the table has | c f" test "$(tm list-keys -T bird_claude_tmux | grep -c "fork.sh' \(split\|window\|float\)")" = 3
+
+echo "# name sync"
+setup
+title() { tm select-pane -t "$1" -T "$2"; }
+# Waits up to 1 s for a window name; hooks run async.
+name_is() {
+  local name=$1 target=$2 want=$3 got
+  for _ in {1..50}; do
+    got=$(tm display -p -t "$target" '#{window_name}')
+    [[ $got == "$want" ]] && { echo "ok   $name"; return; }
+    sleep 0.02
+  done
+  fail "$name: want [$want] got [$got]"
+}
+# Waits until a new pane's process is claude, as Claude sets its title only after startup.
+runs_claude() {
+  for _ in {1..50}; do
+    [[ $(tm display -p -t "$1" '#{pane_current_command}') == claude ]] && return
+    sleep 0.02
+  done
+}
+# For checks that nothing happens: gives async hooks time to run first.
+settle() { sleep 0.2; }
+title %0 '✳ First topic'
+name_is "the window follows Claude's title" t:0 "First topic"
+title %0 '⠂ Second topic'
+name_is "any leading glyph is stripped" t:0 "Second topic"
+title %0 '✳ Claude Code'
+settle
+name_is "the placeholder title is ignored" t:0 "Second topic"
+title %0 'myhost'
+settle
+name_is "a title without a glyph is ignored" t:0 "Second topic"
+tm rename-window -t t:0 mine
+title %0 '✳ Third topic'
+settle
+name_is "a manual rename locks the window" t:0 mine
+tm set -w -t t:0 automatic-rename on
+title %0 '✳ Fourth topic'
+name_is "automatic-rename on unlocks it" t:0 "Fourth topic"
+tm new-window -d -t t:1 -n named "$claude"
+runs_claude %1
+title %1 '✳ Topic'
+settle
+name_is "a window named before Claude started stays locked" t:1 named
+tm split-window -t t:0 "$claude"
+runs_claude %2
+title %2 '✳ Other pane'
+name_is "a new active Claude pane names the window" t:0 "Other pane"
+tm select-pane -t %0
+name_is "focus on another Claude pane takes its title" t:0 "Fourth topic"
+title %2 '✳ Inactive pane'
+settle
+name_is "an inactive pane's title is ignored" t:0 "Fourth topic"
+tm new-window -d -t t:2 -n plain "$plain"
+tm set -w -t t:2 automatic-rename on
+title %3 '✳ Not Claude'
+settle
+assert "a pane without Claude never names its window" test "$(tm display -p -t t:2 '#{window_name}')" != "Not Claude"
+tm set -g @bird_claude_tmux_sync_title off
+load
+title %0 '✳ Fifth topic'
+settle
+name_is "@bird_claude_tmux_sync_title off stops it" t:0 "Fourth topic"
 
 echo
 if ((fails)); then echo "$fails failed"; exit 1; fi
