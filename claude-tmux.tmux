@@ -13,6 +13,7 @@ default ${o}_icon_needs_input $'\xef\x81\x99'
 default ${o}_icon_done $'\xef\x81\x98'
 default ${o}_process claude
 default ${o}_key A
+default ${o}_picker_key C
 default ${o}_sync_title on
 
 # One word per Claude pane of the window: its state, or idle before any hook.
@@ -43,3 +44,7 @@ tmux bind-key "$(tmux show -gv ${o}_key)" switch-client -T bird_claude_tmux
 tmux bind-key -T bird_claude_tmux '|' run-shell -b "'$dir/scripts/fork.sh' split '#{pane_id}' '#{client_name}'"
 tmux bind-key -T bird_claude_tmux c run-shell -b "'$dir/scripts/fork.sh' window '#{pane_id}' '#{client_name}'"
 tmux bind-key -T bird_claude_tmux f run-shell -b "'$dir/scripts/fork.sh' float '#{pane_id}' '#{client_name}'"
+tmux bind-key -T bird_claude_tmux j run-shell -b "'$dir/scripts/jump.sh' '#{pane_id}' '#{client_name}'"
+
+# Picker of all Claude panes (decision 11).
+tmux bind-key "$(tmux show -gv ${o}_picker_key)" display-popup -E -w 90% -h 80% "'$dir/scripts/picker.sh'"

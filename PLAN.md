@@ -4,7 +4,7 @@ A TPM-installable tmux plugin that shows the state of Claude Code per window,
 plus fork helpers and one-way name sync (Claude → window). The same repo is
 also a Claude Code plugin that ships the hooks.
 
-Status: decisions made (see below), Phases 0 to 3 done. Next step: Phase 4.
+Status: decisions made (see below), Phases 0 to 4 done. Next step: Phase 5.
 New session: read [Handoff](#handoff) at the end first.
 
 ## Context: what I found in your setup
@@ -519,7 +519,11 @@ Written 2026-11-22 for the next Claude session, updated 2026-11-23.
 - Phase 2 is done: `fork.sh` and the `prefix A` table (`|`, `c`, `f`), tested
   with a stub shell and claude. Not tried live yet.
 - Phase 3 is done: name sync hooks at `pane-title-changed[4247]` and
-  `window-pane-changed[4248]`. Not tried live yet. Next: Phase 4.
+  `window-pane-changed[4248]`. Not tried live yet.
+- Phase 4 is done: `jump.sh` (`prefix A j`) and `picker.sh` (`prefix C`). The
+  picker is tested through `rows`, `preview` and `toggle`, and with the real
+  fzf via `FZF_DEFAULT_OPTS=--filter=...`. Not tried live yet. Next: the
+  user's live checks of Phases 2 to 4, then Phase 5.
 
 ## Design gap: closed (Phase 0, item 10)
 

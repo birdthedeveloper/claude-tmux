@@ -367,6 +367,56 @@ title %0 '✳ Fifth topic'
 settle
 name_is "@bird_claude_tmux_sync_title off stops it" t:0 "Fourth topic"
 
+echo "# jump"
+setup
+for w in 1 2 3; do tm new-window -d -t "t:$w" "$claude"; done
+tm new-window -d -t t:4 "$plain"
+for p in %1 %2 %3; do runs_claude "$p"; done
+st() { tm set -p -t "$1" @bird_claude_tmux_state "$2"; }
+st %1 needs-input
+st %2 'done'
+st %3 needs-input
+st %4 needs-input
+attach
+client=$(tm list-clients -F '#{client_name}')
+at() { tm list-clients -F '#{pane_id}'; }
+jump() { env -u TMUX_PANE TMUX="$sockpath,0,0" bash "$root/scripts/jump.sh" "$(at)" "$client"; }
+jump
+assert "jump goes to the first needs-input pane" test "$(at)" = %1
+jump
+assert "again: on to the next needs-input pane" test "$(at)" = %3
+jump
+assert "then to the done pane, skipping panes without Claude" test "$(at)" = %2
+expect "arriving there clears its done" t:2 " I"
+jump
+assert "then round again" test "$(at)" = %1
+st %1 idle
+st %3 idle
+jump
+assert "with nothing to do it stays put" test "$(at)" = %1
+assert "prefix A j runs jump.sh" grep -q jump.sh <<<"$(tm list-keys -T bird_claude_tmux j)"
+
+echo "# picker"
+setup
+title %0 '✳ Topic A'
+st %0 needs-input
+tm new-window -d -t t:1 -n beta "$claude"
+tm new-window -d -t t:2 "$plain"
+tm split-window -d -t t:0 "$claude"
+for p in %1 %3; do runs_claude "$p"; done
+picker() { env -u TMUX_PANE TMUX="$sockpath,0,0" bash "$root/scripts/picker.sh" "$@"; }
+rows=$(picker rows)
+assert "rows: only Claude panes, pane id first" test "$(cut -f1 <<<"$rows" | tr '\n' ' ')" = "%0 %3 %1 "
+assert "rows: location, state icon and topic" grep -qE $'^%0\tt:0.0 +N +.*Topic A$' <<<"$rows"
+assert "preview shows the pane's screen" test "$(FZF_PREVIEW_LABEL=' pane ' picker preview %0)" = "$(tm capture-pane -ep -t %0)"
+assert "window preview stacks all panes of the window" test "$(FZF_PREVIEW_LABEL=' window ' picker preview %0 | grep -c '^────')" = 2
+assert "ctrl-w switches the preview to the window" test "$(FZF_PREVIEW_LABEL=' pane ' picker toggle)" = 'change-preview-label( window )+refresh-preview'
+assert "and back to the pane" test "$(FZF_PREVIEW_LABEL=' window ' picker toggle)" = 'change-preview-label( pane )+refresh-preview'
+attach
+FZF_DEFAULT_OPTS='--filter=beta' picker
+assert "fzf takes the options and a pick switches the client" test "$(tm list-clients -F '#{pane_id}')" = %1
+assert "prefix C opens the picker" grep -q 'display-popup.*picker.sh' <<<"$(tm list-keys -T prefix C)"
+
 echo
 if ((fails)); then echo "$fails failed"; exit 1; fi
 echo "all passed"
